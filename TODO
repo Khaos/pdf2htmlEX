@@ -1,3 +1,7 @@
+remove unused glyphs
+
+don't dump image when there is nothing
+
 Integrate splash/cairo
 native support for image
 native support for draw
@@ -6,7 +10,7 @@ about glyph width:
  - IE
  - stretching ratio might not be correct.. letter 'f'
 
-draw lines with CSS
+draw non-orthogonal lines with CSS
 
 create a glyph for ' ', if there is not in a font
 
