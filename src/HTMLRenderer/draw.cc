@@ -104,7 +104,7 @@ static void get_shading_bbox(GfxState * state, GfxShading * shading,
  */
 static double get_angle(double dx, double dy)
 {
-    double r = hypot(dx, dy);
+    double r = _hypot(dx, dy);
 
     /*
      * acos always returns [0, pi]
@@ -236,11 +236,26 @@ GBool HTMLRenderer::axialShadedFill(GfxState *state, GfxAxialShading *shading, d
 
 //TODO track state
 //TODO connection style
-void HTMLRenderer::css_draw(GfxState *state, bool fill)
+bool HTMLRenderer::css_do_path(GfxState *state, bool fill, bool test_only)
 {
-    if(!(param->css_draw)) return;
+    if(!(param->css_draw)) return false;
 
     GfxPath * path = state->getPath();
+    /* 
+     * capacity check
+     */
+    for(int i = 0; i < path->getNumSubpaths(); ++i)
+    {
+        GfxSubpath * subpath = path->getSubpath(i);
+        if(!(is_horizontal_line(subpath)
+             || is_vertical_line(subpath)
+             || is_rectangle(subpath)))
+            return false;
+    }
+
+    if(test_only) 
+        return true;
+
     for(int i = 0; i < path->getNumSubpaths(); ++i)
     {
         GfxSubpath * subpath = path->getSubpath(i);
@@ -279,12 +294,11 @@ void HTMLRenderer::css_draw(GfxState *state, bool fill)
         }
         else if(is_rectangle(subpath))
         {
-            close_text_line();
             double x1 = subpath->getX(0);
             double x2 = subpath->getX(2);
             double y1 = subpath->getY(0);
             double y2 = subpath->getY(2);
-            
+
             if(x1 > x2) swap(x1, x2);
             if(y1 > y2) swap(y1, y2);
 
@@ -318,7 +332,12 @@ void HTMLRenderer::css_draw(GfxState *state, bool fill)
                     lw, lw_count,
                     ps, pf);
         }
+        else
+        {
+            assert(false);
+        }
     }
+    return true;
 }
 
 void HTMLRenderer::css_draw_rectangle(double x, double y, double w, double h, const double * tm,
@@ -339,7 +358,7 @@ void HTMLRenderer::css_draw_rectangle(double x, double y, double w, double h, co
 
         double i1 = (new_tm[0] + new_tm[2]) / sqrt2;
         double i2 = (new_tm[1] + new_tm[3]) / sqrt2;
-        scale = hypot(i1, i2);
+        scale = _hypot(i1, i2);
         if(_is_positive(scale))
         {
             for(int i = 0; i < 4; ++i)
