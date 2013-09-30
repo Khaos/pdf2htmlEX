@@ -15,7 +15,8 @@
 #include <GfxFont.h>
 
 #include "Preprocessor.h"
-#include "util.h"
+#include "util/misc.h"
+#include "util/const.h"
 
 namespace pdf2htmlEX {
 
@@ -24,7 +25,7 @@ using std::endl;
 using std::flush;
 using std::max;
 
-Preprocessor::Preprocessor(const Param * param)
+Preprocessor::Preprocessor(const Param & param)
     : OutputDev()
     , param(param)
     , max_width(0)
@@ -41,14 +42,20 @@ Preprocessor::~Preprocessor(void)
 
 void Preprocessor::process(PDFDoc * doc)
 {
-    for(int i = param->first_page; i <= param->last_page ; ++i) 
+    int page_count = (param.last_page - param.first_page + 1);
+    for(int i = param.first_page; i <= param.last_page ; ++i) 
     {
-        doc->displayPage(this, i, DEFAULT_DPI, DEFAULT_DPI,
-                0, true, false, false,
-                nullptr, nullptr, nullptr, nullptr);
+        cerr << "Preprocessing: " << (i-param.first_page) << "/" << page_count << '\r' << flush;
 
-        cerr << "." << flush;
+        doc->displayPage(this, i, DEFAULT_DPI, DEFAULT_DPI,
+                0, 
+                (!(param.use_cropbox)),
+                true,  // crop
+                false, // printing
+                nullptr, nullptr, nullptr, nullptr);
     }
+    if(page_count >= 0)
+        cerr << "Preprocessing: " << page_count << "/" << page_count;
     cerr << endl;
 }
 
@@ -81,6 +88,11 @@ void Preprocessor::drawChar(GfxState *state, double x, double y,
 }
 
 void Preprocessor::startPage(int pageNum, GfxState *state)
+{
+    startPage(pageNum, state, nullptr);
+}
+
+void Preprocessor::startPage(int pageNum, GfxState *state, XRef * xref)
 {
     max_width = max<double>(max_width, state->getPageWidth());
     max_height = max<double>(max_height, state->getPageHeight());

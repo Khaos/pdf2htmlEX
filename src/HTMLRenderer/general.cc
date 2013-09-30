@@ -3,8 +3,7 @@
  *
  * Handling general stuffs
  *
- * Copyright (C) 2012 Lu Wang <coolwanglu@gmail.com>
- * 2012.08.14
+ * Copyright (C) 2012,2013 Lu Wang <coolwanglu@gmail.com>
  */
 
 #include <cstdio>
@@ -13,11 +12,21 @@
 #include <algorithm>
 #include <vector>
 
-#include "HTMLRenderer.h"
-#include "BackgroundRenderer.h"
-#include "namespace.h"
-#include "ffw.h"
+#include <GlobalParams.h>
+
 #include "pdf2htmlEX-config.h"
+#include "HTMLRenderer.h"
+#include "HTMLTextLine.h"
+#include "Base64Stream.h"
+
+#include "BackgroundRenderer/BackgroundRenderer.h"
+
+#include "util/namespace.h"
+#include "util/ffw.h"
+#include "util/math.h"
+#include "util/path.h"
+#include "util/css_const.h"
+#include "util/encoding.h"
 
 namespace pdf2htmlEX {
 
@@ -28,35 +37,50 @@ using std::max;
 using std::min_element;
 using std::vector;
 using std::abs;
+using std::cerr;
+using std::endl;
 
-static void dummy(void *, enum ErrorCategory, int pos, char *)
-{
-}
-
-HTMLRenderer::HTMLRenderer(const Param * param)
+HTMLRenderer::HTMLRenderer(const Param & param)
     :OutputDev()
-    ,line_opened(false)
-    ,line_buf(this)
-    ,preprocessor(param)
-    ,image_count(0)
     ,param(param)
+    ,html_text_page(param, all_manager)
+    ,preprocessor(param)
+	,tmp_files(param)
 {
-    if(!(param->debug))
+    if(!(param.debug))
     {
-        //disable error function of poppler
-        setErrorCallback(&dummy, nullptr);
+        //disable error messages of poppler
+        globalParams->setErrQuiet(gTrue);
     }
 
-    ffw_init(param->debug);
+    ffw_init(param.debug);
     cur_mapping = new int32_t [0x10000];
     cur_mapping2 = new char* [0x100];
     width_list = new int [0x10000];
+
+    /*
+     * For these states, usually the error will not be accumulated
+     * or may be handled well (whitespace_manager)
+     * So we can set a large eps here
+     */
+    all_manager.vertical_align.set_eps(param.v_eps);
+    all_manager.whitespace    .set_eps(param.h_eps);
+    all_manager.left          .set_eps(param.h_eps);
+    /*
+     * For othere states, we need accurate values
+     * optimization will be done separately
+     */
+    all_manager.font_size   .set_eps(EPS);
+    all_manager.letter_space.set_eps(EPS);
+    all_manager.word_space  .set_eps(EPS);
+    all_manager.height      .set_eps(EPS);
+    all_manager.width       .set_eps(EPS);
+    all_manager.bottom      .set_eps(EPS);
 }
 
 HTMLRenderer::~HTMLRenderer()
 { 
-    ffw_fin();
-    clean_tmp_files();
+    ffw_finalize();
     delete [] cur_mapping;
     delete [] cur_mapping2;
     delete [] width_list;
@@ -65,95 +89,75 @@ HTMLRenderer::~HTMLRenderer()
 void HTMLRenderer::process(PDFDoc *doc)
 {
     cur_doc = doc;
+    cur_catalog = doc->getCatalog();
     xref = doc->getXRef();
 
-    cerr << "Preprocessing: ";
-    preprocessor.process(doc);
+    pre_process(doc);
 
-    /*
-     * determine scale factors
-     */
+    ///////////////////
+    // Process pages
+    
+    bg_renderer = nullptr;
+    if(param.process_nontext)
     {
-        double zoom = 1.0;
-
-        vector<double> zoom_factors;
-        
-        if(_is_positive(param->zoom))
-        {
-            zoom_factors.push_back(param->zoom);
-        }
-
-        if(_is_positive(param->fit_width))
-        {
-            zoom_factors.push_back((param->fit_width) / preprocessor.get_max_width());
-        }
-
-        if(_is_positive(param->fit_height))
-        {
-            zoom_factors.push_back((param->fit_height) / preprocessor.get_max_height());
-        }
-
-        if(zoom_factors.empty())
-        {
-            zoom = 1.0;
-        }
-        else
-        {
-            zoom = *min_element(zoom_factors.begin(), zoom_factors.end());
-        }
-        
-        text_scale_factor1 = max<double>(zoom, param->font_size_multiplier);  
-        text_scale_factor2 = zoom / text_scale_factor1;
+        bg_renderer = BackgroundRenderer::getBackgroundRenderer(param.bg_format, this, param);
+        if(!bg_renderer)
+            throw "Cannot initialize background renderer, unsupported format";
+        bg_renderer->init(doc);
     }
 
-
-    cerr << "Working: ";
-    BackgroundRenderer * bg_renderer = nullptr;
-    if(param->process_nontext)
+    int page_count = (param.last_page - param.first_page + 1);
+    for(int i = param.first_page; i <= param.last_page ; ++i) 
     {
-        bg_renderer = new BackgroundRenderer(this, param);
-        bg_renderer->startDoc(doc);
-    }
+        cerr << "Working: " << (i-param.first_page) << "/" << page_count << '\r' << flush;
 
-    pre_process();
-
-    for(int i = param->first_page; i <= param->last_page ; ++i) 
-    {
-        if(param->split_pages)
+        if(param.split_pages)
         {
-            auto page_fn = str_fmt("%s/%s%d.page", param->dest_dir.c_str(), param->output_filename.c_str(), i);
-            html_fout.open((char*)page_fn, ofstream::binary); 
-            if(!html_fout)
+            string filled_template_filename = (char*)str_fmt(param.page_filename.c_str(), i);
+            auto page_fn = str_fmt("%s/%s", param.dest_dir.c_str(), filled_template_filename.c_str());
+            f_curpage = new ofstream((char*)page_fn, ofstream::binary); 
+            if(!(*f_curpage))
                 throw string("Cannot open ") + (char*)page_fn + " for writing";
-            fix_stream(html_fout);
+            set_stream_flags((*f_curpage));
+
+            cur_page_filename = filled_template_filename;
         }
 
-        if(param->process_nontext)
+        if(param.process_nontext)
         {
-            auto fn = str_fmt("%s/p%x.png", (param->single_html ? param->tmp_dir : param->dest_dir).c_str(), i);
-            if(param->single_html)
-                add_tmp_file((char*)fn);
-
-            bg_renderer->render_page(doc, i, (char*)fn);
+            bg_renderer->render_page(doc, i);
         }
 
         doc->displayPage(this, i, 
                 text_zoom_factor() * DEFAULT_DPI, text_zoom_factor() * DEFAULT_DPI,
-                0, true, false, false,
+                0, 
+                (!(param.use_cropbox)),
+                true,  // crop
+                false, // printing
                 nullptr, nullptr, nullptr, nullptr);
 
-        if(param->split_pages)
+        if(param.split_pages)
         {
-            html_fout.close();
+            delete f_curpage;
+            f_curpage = nullptr;
         }
-
-        cerr << "." << flush;
     }
+    if(page_count >= 0)
+        cerr << "Working: " << page_count << "/" << page_count;
+    cerr << endl;
+
+    ////////////////////////
+    // Process Outline
+    if(param.process_outline)
+        process_outline(); 
 
     post_process();
 
     if(bg_renderer)
+    {
         delete bg_renderer;
+        bg_renderer = nullptr;
+    }
 
     cerr << endl;
 }
@@ -163,181 +167,237 @@ void HTMLRenderer::setDefaultCTM(double *ctm)
     memcpy(default_ctm, ctm, sizeof(default_ctm));
 }
 
-void HTMLRenderer::startPage(int pageNum, GfxState *state) 
+#if POPPLER_OLDER_THAN_0_23_0
+void HTMLRenderer::startPage(int pageNum, GfxState *state)
+#else
+void HTMLRenderer::startPage(int pageNum, GfxState *state, XRef * xref) 
+#endif
 {
     this->pageNum = pageNum;
-    this->pageWidth = state->getPageWidth();
-    this->pageHeight = state->getPageHeight();
 
-    assert((!line_opened) && "Open line in startPage detected!");
+    double pageWidth = state->getPageWidth();
+    double pageHeight = state->getPageHeight();
 
-    html_fout 
-        << "<div class=\"d\" style=\"width:" 
-            << (pageWidth) << "px;height:" 
-            << (pageHeight) << "px;\">"
-        << "<div id=\"p" << pageNum << "\" data-page-no=\"" << pageNum << "\" class=\"p\">"
-        << "<div class=\"b\" style=\"";
+    html_text_page.set_page_size(pageWidth, pageHeight);
 
-    if(param->process_nontext)
+    long long wid = all_manager.width.install(pageWidth);
+    long long hid = all_manager.height.install(pageHeight);
+    (*f_curpage)
+        << "<div class=\"" << CSS::PAGE_DECORATION_CN 
+            << " " << CSS::WIDTH_CN << wid
+            << " " << CSS::HEIGHT_CN << hid
+            << "\">"
+        << "<div id=\"" << CSS::PAGE_FRAME_CN << pageNum 
+            << "\" class=\"" << CSS::PAGE_FRAME_CN
+            << "\" data-page-no=\"" << pageNum << "\">"
+        << "<div class=\"" << CSS::PAGE_CONTENT_BOX_CN 
+            << " " << CSS::PAGE_CONTENT_BOX_CN << pageNum
+            << "\">";
+
+    /*
+     * When split_pages is on, f_curpage points to the current page file
+     * and we want to output empty frames in f_pages.fs
+     */
+    if(param.split_pages)
     {
-        html_fout << "background-image:url(";
+        f_pages.fs
+            << "<div class=\"" << CSS::PAGE_DECORATION_CN 
+                << " " << CSS::WIDTH_CN << wid
+                << " " << CSS::HEIGHT_CN << hid
+                << "\">"
+            << "<div id=\"" << CSS::PAGE_FRAME_CN << pageNum 
+                << "\" class=\"" << CSS::PAGE_FRAME_CN
+                << "\" data-page-no=\"" << pageNum 
+                << "\" data-page-url=\"";
 
-        {
-            if(param->single_html)
-            {
-                auto path = str_fmt("%s/p%x.png", param->tmp_dir.c_str(), pageNum);
-                ifstream fin((char*)path, ifstream::binary);
-                if(!fin)
-                    throw string("Cannot read background image ") + (char*)path;
-                html_fout << "'data:image/png;base64," << base64stream(fin) << "'";
-            }
-            else
-            {
-                html_fout << str_fmt("p%x.png", pageNum);
-            }
-        }
-
-        html_fout << ");background-position:0 0;background-size:" << pageWidth << "px " << pageHeight << "px;background-repeat:no-repeat;";
+        outputURL(f_pages.fs, cur_page_filename);
+        f_pages.fs << "\">";
     }
 
-    html_fout << "\">";
-    draw_text_scale = 1.0;
+    if(param.process_nontext)
+    {
+        bg_renderer->embed_image(pageNum);
+    }
 
-    cur_font_info = install_font(nullptr);
-    cur_font_size = draw_font_size = 0;
-    cur_fs_id = install_font_size(cur_font_size);
-    
-    memcpy(cur_text_tm, id_matrix, sizeof(cur_text_tm));
-    memcpy(draw_text_tm, id_matrix, sizeof(draw_text_tm));
-    cur_ttm_id = install_transform_matrix(draw_text_tm);
-
-    cur_letter_space = cur_word_space = 0;
-    cur_ls_id = install_letter_space(cur_letter_space);
-    cur_ws_id = install_word_space(cur_word_space);
-
-    cur_color.r = cur_color.g = cur_color.b = 0;
-    cur_color_id = install_color(&cur_color);
-
-    cur_rise = 0;
-    cur_rise_id = install_rise(cur_rise);
-
-    cur_tx = cur_ty = 0;
-    draw_tx = draw_ty = 0;
-
-    reset_state_change();
-    all_changed = true;
+    reset_state();
 }
 
 void HTMLRenderer::endPage() {
-    close_text_line();
+    // dump all text
+    html_text_page.dump_text(*f_curpage);
+    html_text_page.dump_css(f_css.fs);
+    html_text_page.clear();
 
     // process links before the page is closed
     cur_doc->processLinks(this, pageNum);
 
     // close box
-    html_fout << "</div>";
+    (*f_curpage) << "</div>";
 
     // dump info for js
     // TODO: create a function for this
     // BE CAREFUL WITH ESCAPES
-    html_fout << "<div class=\"j\" data-data='{";
+    (*f_curpage) << "<div class=\"" << CSS::PAGE_DATA_CN << "\" data-data='{";
     
     //default CTM
-    html_fout << "\"ctm\":[";
+    (*f_curpage) << "\"ctm\":[";
     for(int i = 0; i < 6; ++i)
     {
-        if(i > 0) html_fout << ",";
-        html_fout << _round(default_ctm[i]);
+        if(i > 0) (*f_curpage) << ",";
+        (*f_curpage) << round(default_ctm[i]);
     }
-    html_fout << "]";
+    (*f_curpage) << "]";
 
-    html_fout << "}'></div>";
+    (*f_curpage) << "}'></div>";
     
     // close page
-    html_fout << "</div></div>" << endl;
+    (*f_curpage) << "</div></div>" << endl;
+
+    if(param.split_pages)
+    {
+        f_pages.fs << "</div></div>" << endl;
+    }
 }
 
-void HTMLRenderer::pre_process()
+void HTMLRenderer::pre_process(PDFDoc * doc)
 {
+    preprocessor.process(doc);
+
+    /*
+     * determine scale factors
+     */
+    {
+        vector<double> zoom_factors;
+        
+        if(is_positive(param.zoom))
+        {
+            zoom_factors.push_back(param.zoom);
+        }
+
+        if(is_positive(param.fit_width))
+        {
+            zoom_factors.push_back((param.fit_width) / preprocessor.get_max_width());
+        }
+
+        if(is_positive(param.fit_height))
+        {
+            zoom_factors.push_back((param.fit_height) / preprocessor.get_max_height());
+        }
+
+        double zoom = (zoom_factors.empty() ? 1.0 : (*min_element(zoom_factors.begin(), zoom_factors.end())));
+        
+        text_scale_factor1 = max<double>(zoom, param.font_size_multiplier);  
+        text_scale_factor2 = zoom / text_scale_factor1;
+    }
+
     // we may output utf8 characters, so always use binary
     {
         /*
-         * If single-html && !split-pages
+         * If embed-css
          * we have to keep the generated css file into a temporary place
          * and embed it into the main html later
          *
-         *
-         * If single-html && split-page
-         * as there's no place to embed the css file, just leave it alone (into param->dest_dir)
-         *
-         * If !single-html
-         * leave it in param->dest_dir
+         * otherwise
+         * leave it in param.dest_dir
          */
 
-        auto fn = (param->single_html && (!param->split_pages))
-            ? str_fmt("%s/__css", param->tmp_dir.c_str())
-            : str_fmt("%s/%s", param->dest_dir.c_str(), param->css_filename.c_str());
+        auto fn = (param.embed_css)
+            ? str_fmt("%s/__css", param.tmp_dir.c_str())
+            : str_fmt("%s/%s", param.dest_dir.c_str(), param.css_filename.c_str());
 
-        if(param->single_html && (!param->split_pages))
-            add_tmp_file((char*)fn);
+        if(param.embed_css)
+            tmp_files.add((char*)fn);
 
-        css_path = (char*)fn,
-        css_fout.open(css_path, ofstream::binary);
-        if(!css_fout)
+        f_css.path = (char*)fn;
+        f_css.fs.open(f_css.path, ofstream::binary);
+        if(!f_css.fs)
             throw string("Cannot open ") + (char*)fn + " for writing";
-        fix_stream(css_fout);
+        set_stream_flags(f_css.fs);
     }
 
-    // if split-pages is specified, open & close the file in the process loop
-    // if not, open the file here:
-    if(!param->split_pages)
+    if (param.process_outline)
     {
         /*
-         * If single-html
-         * we have to keep the html file (for page) into a temporary place
+         * The logic for outline is similar to css
+         */
+
+        auto fn = (param.embed_outline)
+            ? str_fmt("%s/__outline", param.tmp_dir.c_str())
+            : str_fmt("%s/%s", param.dest_dir.c_str(), param.outline_filename.c_str());
+
+        if(param.embed_outline)
+            tmp_files.add((char*)fn);
+
+        f_outline.path = (char*)fn;
+        f_outline.fs.open(f_outline.path, ofstream::binary);
+        if(!f_outline.fs)
+            throw string("Cannot open") + (char*)fn + " for writing";
+
+        // might not be necessary
+        set_stream_flags(f_outline.fs);
+    }
+
+    {
+        /*
+         * we have to keep the html file for pages into a temporary place
          * because we'll have to embed css before it
          *
          * Otherwise just generate it 
          */
-        auto fn = str_fmt("%s/__pages", param->tmp_dir.c_str());
-        add_tmp_file((char*)fn);
+        auto fn = str_fmt("%s/__pages", param.tmp_dir.c_str());
+        tmp_files.add((char*)fn);
 
-        html_path = (char*)fn;
-        html_fout.open(html_path, ofstream::binary); 
-        if(!html_fout)
+        f_pages.path = (char*)fn;
+        f_pages.fs.open(f_pages.path, ofstream::binary); 
+        if(!f_pages.fs)
             throw string("Cannot open ") + (char*)fn + " for writing";
-        fix_stream(html_fout);
+        set_stream_flags(f_pages.fs);
+    }
+
+    if(param.split_pages)
+    {
+        f_curpage = nullptr;
+    }
+    else
+    {
+        f_curpage = &f_pages.fs;
     }
 }
 
-void HTMLRenderer::post_process()
+void HTMLRenderer::post_process(void)
 {
-    // close files
-    html_fout.close(); 
-    css_fout.close();
+    dump_css();
+    // close files if they opened
+    // it's better to brace single liner LLVM complains
+    if (param.process_outline)
+    {
+        f_outline.fs.close();
+    }
+    f_pages.fs.close(); 
+    f_css.fs.close();
 
-    //only when split-page, do we have some work left to do
-    if(param->split_pages)
-        return;
-
+    // build the main HTML file
     ofstream output;
     {
-        auto fn = str_fmt("%s/%s", param->dest_dir.c_str(), param->output_filename.c_str());
+        auto fn = str_fmt("%s/%s", param.dest_dir.c_str(), param.output_filename.c_str());
         output.open((char*)fn, ofstream::binary);
         if(!output)
             throw string("Cannot open ") + (char*)fn + " for writing";
-        fix_stream(output);
+        set_stream_flags(output);
     }
 
     // apply manifest
-    ifstream manifest_fin((char*)str_fmt("%s/%s", param->data_dir.c_str(), MANIFEST_FILENAME.c_str()), ifstream::binary);
+    ifstream manifest_fin((char*)str_fmt("%s/%s", param.data_dir.c_str(), MANIFEST_FILENAME.c_str()), ifstream::binary);
     if(!manifest_fin)
         throw "Cannot open the manifest file";
 
     bool embed_string = false;
     string line;
+    long line_no = 0;
     while(getline(manifest_fin, line))
     {
+        ++line_no;
+
         if(line == "\"\"\"")
         {
             embed_string = !embed_string;
@@ -350,13 +410,29 @@ void HTMLRenderer::post_process()
             continue;
         }
 
+        // trim space at both sides
+        {
+            static const char * whitespaces = " \t\n\v\f\r";
+            auto idx1 = line.find_first_not_of(whitespaces);
+            if(idx1 == string::npos)
+            {
+                line.clear();
+            }
+            else
+            {
+                auto idx2 = line.find_last_not_of(whitespaces);
+                assert(idx2 >= idx1);
+                line = line.substr(idx1, idx2 - idx1 + 1);
+            }
+        }
+
         if(line.empty() || line[0] == '#')
             continue;
 
 
         if(line[0] == '@')
         {
-            embed_file(output, param->data_dir + "/" + line.substr(1), "", true);
+            embed_file(output, param.data_dir + "/" + line.substr(1), "", true);
             continue;
         }
 
@@ -364,18 +440,30 @@ void HTMLRenderer::post_process()
         {
             if(line == "$css")
             {
-                embed_file(output, css_path, ".css", false);
+                embed_file(output, f_css.path, ".css", false);
+            }
+            else if (line == "$outline")
+            {
+                if (param.process_outline && param.embed_outline)
+                {
+                    ifstream fin(f_outline.path, ifstream::binary);
+                    if(!fin)
+                        throw "Cannot open outline for reading";
+                    output << fin.rdbuf();
+                    output.clear(); // output will set fail big if fin is empty
+                }
             }
             else if (line == "$pages")
             {
-                ifstream fin(html_path, ifstream::binary);
+                ifstream fin(f_pages.path, ifstream::binary);
                 if(!fin)
-                    throw "Cannot open read the pages";
+                    throw "Cannot open pages for reading";
                 output << fin.rdbuf();
+                output.clear(); // output will set fail bit if fin is empty
             }
             else
             {
-                cerr << "Warning: unknown line in manifest: " << line << endl;
+                cerr << "Warning: manifest line " << line_no << ": Unknown content \"" << line << "\"" << endl;
             }
             continue;
         }
@@ -384,38 +472,49 @@ void HTMLRenderer::post_process()
     }
 }
 
-void HTMLRenderer::fix_stream (std::ostream & out)
+void HTMLRenderer::set_stream_flags(std::ostream & out)
 {
     // we output all ID's in hex
     // browsers are not happy with scientific notations
     out << hex << fixed;
 }
 
-void HTMLRenderer::add_tmp_file(const string & fn)
+void HTMLRenderer::dump_css (void)
 {
-    if(!param->clean_tmp)
-        return;
-
-    if(tmp_files.insert(fn).second && param->debug)
-        cerr << "Add new temporary file: " << fn << endl;
-}
-
-void HTMLRenderer::clean_tmp_files()
-{
-    if(!param->clean_tmp)
-        return;
-
-    for(auto iter = tmp_files.begin(); iter != tmp_files.end(); ++iter)
+    all_manager.transform_matrix.dump_css(f_css.fs);
+    all_manager.vertical_align  .dump_css(f_css.fs);
+    all_manager.letter_space    .dump_css(f_css.fs);
+    all_manager.stroke_color    .dump_css(f_css.fs);
+    all_manager.word_space      .dump_css(f_css.fs);
+    all_manager.whitespace      .dump_css(f_css.fs);
+    all_manager.fill_color      .dump_css(f_css.fs);
+    all_manager.font_size       .dump_css(f_css.fs);
+    all_manager.bottom          .dump_css(f_css.fs);
+    all_manager.height          .dump_css(f_css.fs);
+    all_manager.width           .dump_css(f_css.fs);
+    all_manager.left            .dump_css(f_css.fs);
+    all_manager.bgimage_size    .dump_css(f_css.fs);
+    
+    // print css
+    if(param.printing)
     {
-        const string & fn = *iter;
-        remove(fn.c_str());
-        if(param->debug)
-            cerr << "Remove temporary file: " << fn << endl;
+        double ps = print_scale();
+        f_css.fs << CSS::PRINT_ONLY << "{" << endl;
+        all_manager.transform_matrix.dump_print_css(f_css.fs, ps);
+        all_manager.vertical_align  .dump_print_css(f_css.fs, ps);
+        all_manager.letter_space    .dump_print_css(f_css.fs, ps);
+        all_manager.stroke_color    .dump_print_css(f_css.fs, ps);
+        all_manager.word_space      .dump_print_css(f_css.fs, ps);
+        all_manager.whitespace      .dump_print_css(f_css.fs, ps);
+        all_manager.fill_color      .dump_print_css(f_css.fs, ps);
+        all_manager.font_size       .dump_print_css(f_css.fs, ps);
+        all_manager.bottom          .dump_print_css(f_css.fs, ps);
+        all_manager.height          .dump_print_css(f_css.fs, ps);
+        all_manager.width           .dump_print_css(f_css.fs, ps);
+        all_manager.left            .dump_print_css(f_css.fs, ps);
+        all_manager.bgimage_size    .dump_print_css(f_css.fs, ps);
+        f_css.fs << "}" << endl;
     }
-
-    remove(param->tmp_dir.c_str());
-    if(param->debug)
-        cerr << "Remove temporary directory: " << param->tmp_dir << endl;
 }
 
 void HTMLRenderer::embed_file(ostream & out, const string & path, const string & type, bool copy)
@@ -423,38 +522,51 @@ void HTMLRenderer::embed_file(ostream & out, const string & path, const string &
     string fn = get_filename(path);
     string suffix = (type == "") ? get_suffix(fn) : type; 
     
-    auto iter = EMBED_STRING_MAP.find(make_pair(suffix, (bool)param->single_html));
+    // TODO
+    auto iter = EMBED_STRING_MAP.find(suffix);
     if(iter == EMBED_STRING_MAP.end())
     {
         cerr << "Warning: unknown suffix: " << suffix << endl;
         return;
     }
+
+    const auto & entry = iter->second;
     
-    if(param->single_html)
+    if(param.*(entry.embed_flag))
     {
         ifstream fin(path, ifstream::binary);
         if(!fin)
             throw string("Cannot open file ") + path + " for embedding";
-        out << iter->second.first << endl
-            << fin.rdbuf()
-            << iter->second.second << endl;
+        out << entry.prefix_embed;
+       
+        if(entry.base64_encode)
+        {
+            out << Base64Stream(fin);
+        }
+        else
+        {
+            out << endl << fin.rdbuf();
+        }
+        out.clear(); // out will set fail big if fin is empty
+        out << entry.suffix_embed << endl;
     }
     else
     {
-        out << iter->second.first
-            << fn
-            << iter->second.second << endl;
+        out << entry.prefix_external;
+        outputURL(out, fn);
+        out << entry.suffix_external << endl;
 
         if(copy)
         {
             ifstream fin(path, ifstream::binary);
             if(!fin)
                 throw string("Cannot copy file: ") + path;
-            auto out_path = param->dest_dir + "/" + fn;
+            auto out_path = param.dest_dir + "/" + fn;
             ofstream out(out_path, ofstream::binary);
             if(!out)
                 throw string("Cannot open file ") + path + " for embedding";
             out << fin.rdbuf();
+            out.clear(); // out will set fail big if fin is empty
         }
     }
 }

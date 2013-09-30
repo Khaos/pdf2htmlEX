@@ -1,6 +1,101 @@
-Latest v0.5
+Developing v0.10
 
+* Logo as loading indicator
+* Add a logo
+* Remove several CSS prefixes
+* Background image optimization
+* Support output background image in JPEG (--bg-format jpg)
+* [Experimental] Support output background image in SVG (--bg-format svg)
+* [Experimental] Support Type 3 fonts
+* New options
+ --bg-format
+ --font-format (same as --font-sufix, but without the leading dot)
+ --process-type3
+* Deprecated options:
+ --font-suffix
+
+v0.9
+2013.09.16
+
+* Lazy loading of pages
+* Show font names in debug messages
+* Licensed changed
+ - Additional terms for usage in online services
+ - Remove GPLv2
+* Bug fixes:
+ - --optimize-text
+ - Always use Unicode encoding for fonts
+ - space width
+ - disable ligature in Firefox
+ - Uninitialized memory for encoding
+* New options:
+ --embed
+ --embed-***
+ --override-fstype
+* Deprecated/Removed options:
+ --single-html
+ --remove-unused-glyph
+
+v0.8
+2013.05.05
+
+* HTML optimization 
+ - reduce number of <span> elements
+ - merge lines with different y values 
+ - merge lines with different (but proportional) transform matrices
+* Custom format for page file name [Ryan Morlok]
+* Workaround for NBSP
+* A default HTML file which load the pages dynamically when split-pages is on
+* Support simple clippings
+* Bug fixed:
+ - missing glyphs in TTF fonts
+ - unexpected vertical shifts
+ - whitespace lost in IE
+* New UI style 
+* New options:
+ --optimize-text : HTML optimization, see above
+ --fallback : the most accurate way, but costy (larger file sizes)
+ --printing : enable or disable CSS for printing
+ --page-file: specify page filenames when split-pages is on
+* Deprecated options:
+ --embed-base-font 
+* New default values:
+ --embed-external-font 1
+ --space-as-offset 0
+ --remove-unused-glyph 0
+
+v0.7
+2013.03.01
+
+* Process outline
+* Fix build with poppler
+* Many code cleaning jobs [John Hewson]
+* Experimental printing support
+* Lots of code refinements
+
+v0.6
+2013.01.26
+
+* new option --no-drm [John Hewson]
+* Travis CI integration [John Hewson]
+* Add a class for 'left'
+* Fixed a bug of hashing/finding GfxRGB
+* new option -v, --version [John Hewson]
+* Render Type 3 fonts as image
+* New parameter: --use-cropbox
+* Progress indicator
+* Create a glyph for ' ' when missing
+* Code refining
+
+v0.5
+2012.10.06
+
+* New option: --remove-unused-glyph
 * New options: --stretch-narrow-glyph, --squeeze-wide-glyph
+* Fixed glyph width adjusting 
+* Fixed a memory issue
+* Working on css-draw
+* Working on integrating background-renderer, preparing for svg renderer in the future
 
 v0.4
 2012.09.26
@@ -13,7 +108,6 @@ v0.4
 * --auto-hint, good for Chrome
 * many fixes for IE
 * adjust widths of fonts according to PDF
-
 
 v0.3
 2012.09.16

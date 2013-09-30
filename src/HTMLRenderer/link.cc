@@ -11,23 +11,47 @@
 #include <sstream>
 #include <algorithm>
 
-#include <HTMLRenderer.h>
 #include <Link.h>
 
-#include "namespace.h"
+#include "HTMLRenderer.h"
+#include "util/namespace.h"
+#include "util/math.h"
+#include "util/misc.h"
+#include "util/encoding.h"
+#include "util/css_const.h"
 
 namespace pdf2htmlEX {
    
 using std::ostringstream;
 using std::min;
 using std::max;
+using std::cerr;
+using std::endl;
 
 /*
  * The detailed rectangle area of the link destination
  * Will be parsed and performed by Javascript
+ * The string will be put into a HTML attribute, surrounded by single quotes
+ * So pay attention to the characters used here
  */
-static string get_dest_detail_str(int pageno, LinkDest * dest)
+static string get_linkdest_detail_str(LinkDest * dest, Catalog * catalog, int & pageno)
 {
+    pageno = 0;
+    if(dest->isPageRef())
+    {
+        auto pageref = dest->getPageRef();
+        pageno = catalog->findPage(pageref.num, pageref.gen);
+    }
+    else
+    {
+        pageno = dest->getPageNum();
+    }
+
+    if(pageno <= 0)
+    {
+        return "";
+    }
+
     ostringstream sout;
     // dec
     sout << "[" << pageno;
@@ -104,16 +128,11 @@ static string get_dest_detail_str(int pageno, LinkDest * dest)
 
     return sout.str();
 }
-    
-/*
- * Based on pdftohtml from poppler
- * TODO: CSS for link rectangles
- * TODO: share rectangle draw with css-draw
- */
-void HTMLRenderer::processLink(AnnotLink * al)
+
+string HTMLRenderer::get_linkaction_str(LinkAction * action, string & detail)
 {
-    std::string dest_str, dest_detail_str;
-    auto action = al->getAction();
+    string dest_str;
+    detail = "";
     if(action)
     {
         auto kind = action->getKind();
@@ -121,34 +140,21 @@ void HTMLRenderer::processLink(AnnotLink * al)
         {
             case actionGoTo:
                 {
-                    auto catalog = cur_doc->getCatalog();
                     auto * real_action = dynamic_cast<LinkGoTo*>(action);
                     LinkDest * dest = nullptr;
                     if(auto _ = real_action->getDest())
                         dest = _->copy();
                     else if (auto _ = real_action->getNamedDest())
-                        dest = catalog->findDest(_);
+                        dest = cur_catalog->findDest(_);
                     if(dest)
                     {
                         int pageno = 0;
-                        if(dest->isPageRef())
-                        {
-                            auto pageref = dest->getPageRef();
-                            pageno = catalog->findPage(pageref.num, pageref.gen);
-                        }
-                        else
-                        {
-                            pageno = dest->getPageNum();
-                        }
-
+                        detail = get_linkdest_detail_str(dest, cur_catalog, pageno);
                         if(pageno > 0)
                         {
-                            dest_str = (char*)str_fmt("#p%x", pageno);
-                            dest_detail_str = get_dest_detail_str(pageno, dest);
+                            dest_str = (char*)str_fmt("#%s%x", CSS::PAGE_FRAME_CN, pageno);
                         }
-
                         delete dest;
-
                     }
                 }
                 break;
@@ -174,18 +180,33 @@ void HTMLRenderer::processLink(AnnotLink * al)
         }
     }
 
-    if(dest_str != "")
+    return dest_str;
+}
+    
+/*
+ * Based on pdftohtml from poppler
+ * TODO: CSS for link rectangles
+ * TODO: share rectangle draw with css-draw
+ */
+void HTMLRenderer::processLink(AnnotLink * al)
+{
+    string dest_detail_str;
+    string dest_str = get_linkaction_str(al->getAction(), dest_detail_str);
+
+    if(!dest_str.empty())
     {
-        html_fout << "<a class=\"a\" href=\"" << dest_str << "\"";
+        (*f_curpage) << "<a class=\"" << CSS::LINK_CN << "\" href=\"";
+        outputURL((*f_curpage), dest_str);
+        (*f_curpage) << "\"";
 
-        if(dest_detail_str != "")
-            html_fout << " data-dest-detail='" << dest_detail_str << "'";
+        if(!dest_detail_str.empty())
+            (*f_curpage) << " data-dest-detail='" << dest_detail_str << "'";
 
-        html_fout << ">";
+        (*f_curpage) << ">";
     }
 
-    html_fout << "<div class=\"Cd t"
-        << install_transform_matrix(default_ctm)
+    (*f_curpage) << "<div class=\"" << CSS::CSS_DRAW_CN << ' ' << CSS::TRANSFORM_MATRIX_CN
+        << all_manager.transform_matrix.install(default_ctm)
         << "\" style=\"";
 
     double x,y,w,h;
@@ -211,31 +232,31 @@ void HTMLRenderer::processLink(AnnotLink * al)
                         border_top_bottom_width, border_left_right_width);
 
                 if(abs(border_top_bottom_width - border_left_right_width) < EPS)
-                    html_fout << "border-width:" << _round(border_top_bottom_width) << "px;";
+                    (*f_curpage) << "border-width:" << round(border_top_bottom_width) << "px;";
                 else
-                    html_fout << "border-width:" << _round(border_top_bottom_width) << "px " << _round(border_left_right_width) << "px;";
+                    (*f_curpage) << "border-width:" << round(border_top_bottom_width) << "px " << round(border_left_right_width) << "px;";
             }
             auto style = border->getStyle();
             switch(style)
             {
                 case AnnotBorder::borderSolid:
-                    html_fout << "border-style:solid;";
+                    (*f_curpage) << "border-style:solid;";
                     break;
                 case AnnotBorder::borderDashed:
-                    html_fout << "border-style:dashed;";
+                    (*f_curpage) << "border-style:dashed;";
                     break;
                 case AnnotBorder::borderBeveled:
-                    html_fout << "border-style:outset;";
+                    (*f_curpage) << "border-style:outset;";
                     break;
                 case AnnotBorder::borderInset:
-                    html_fout << "border-style:inset;";
+                    (*f_curpage) << "border-style:inset;";
                     break;
                 case AnnotBorder::borderUnderlined:
-                    html_fout << "border-style:none;border-bottom-style:solid;";
+                    (*f_curpage) << "border-style:none;border-bottom-style:solid;";
                     break;
                 default:
                     cerr << "Warning:Unknown annotation border style: " << style << endl;
-                    html_fout << "border-style:solid;";
+                    (*f_curpage) << "border-style:solid;";
             }
 
 
@@ -253,36 +274,36 @@ void HTMLRenderer::processLink(AnnotLink * al)
                 r = g = b = 0;
             }
 
-            html_fout << "border-color:rgb("
+            (*f_curpage) << "border-color:rgb("
                 << dec << (int)dblToByte(r) << "," << (int)dblToByte(g) << "," << (int)dblToByte(b) << hex
                 << ");";
         }
         else
         {
-            html_fout << "border-style:none;";
+            (*f_curpage) << "border-style:none;";
         }
     }
     else
     {
-        html_fout << "border-style:none;";
+        (*f_curpage) << "border-style:none;";
     }
 
-    _tm_transform(default_ctm, x, y);
+    tm_transform(default_ctm, x, y);
 
-    html_fout << "position:absolute;"
-        << "left:" << _round(x) << "px;"
-        << "bottom:" << _round(y) << "px;"
-        << "width:" << _round(w) << "px;"
-        << "height:" << _round(h) << "px;";
+    (*f_curpage) << "position:absolute;"
+        << "left:" << round(x) << "px;"
+        << "bottom:" << round(y) << "px;"
+        << "width:" << round(w) << "px;"
+        << "height:" << round(h) << "px;";
 
     // fix for IE
-    html_fout << "background-color:rgba(255,255,255,0.000001);";
+    (*f_curpage) << "background-color:rgba(255,255,255,0.000001);";
 
-    html_fout << "\"></div>";
+    (*f_curpage) << "\"></div>";
 
     if(dest_str != "")
     {
-        html_fout << "</a>";
+        (*f_curpage) << "</a>";
     }
 }
 

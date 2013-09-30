@@ -1,3 +1,115 @@
+pdf2htmlex (0.9-1~git201309161133rd60eb-0ubuntu1) raring; urgency=low
+
+  * fix cmake test for packaging
+
+ -- WANG Lu <coolwanglu@gmail.com>  Mon, 16 Sep 2013 11:33:11 +0800
+
+pdf2htmlex (0.9-1~git201309161021rf2993-0ubuntu1) raring; urgency=low
+
+  * v0.9 released, see Changelog
+
+ -- WANG Lu <coolwanglu@gmail.com>  Mon, 16 Sep 2013 10:21:05 +0800
+
+pdf2htmlex (0.9-1~git201305291247rf655a-0ubuntu1) raring; urgency=low
+
+  * Regular upload
+
+ -- WANG Lu <coolwanglu@gmail.com>  Wed, 29 May 2013 12:47:16 +0800
+
+pdf2htmlex (0.8-1~git201305051429r92eab-0ubuntu1) raring; urgency=low
+
+  * v0.8 released, see Changelog 
+
+ -- WANG Lu <coolwanglu@gmail.com>  Sun, 05 May 2013 14:29:07 +0800
+
+pdf2htmlex (0.8-1~git201304281550rd5f9c-0ubuntu1) raring; urgency=low
+
+  * Test packaging for multiple distributions
+  * Fix crashing with --split-pages
+
+ -- WANG Lu <coolwanglu@gmail.com>  Sun, 28 Apr 2013 15:39:34 +0800
+
+pdf2htmlex (0.8-1~git201304151420r1da9b-0ubuntu1) quantal; urgency=low
+
+  * HTML optimization
+  * New options: --optimize-text, --fallabck
+  * See more in Changelog
+
+ -- WANG Lu <coolwanglu@gmail.com>  Mon, 15 Apr 2013 14:20:22 +0800
+
+pdf2htmlex (0.8-1~git201303011406r3bc73-0ubuntu1) quantal; urgency=low
+
+  * Experimental printing support
+  * New version
+
+ -- WANG Lu <coolwanglu@gmail.com>  Fri, 01 Mar 2013 14:06:42 +0800
+
+pdf2htmlex (0.7-1~git201302282259r3bc73-0ubuntu1) quantal; urgency=low
+
+  * suggests ttfautohint
+
+ -- WANG Lu <coolwanglu@gmail.com>  Thu, 28 Feb 2013 22:59:45 +0800
+
+pdf2htmlex (0.7-1~git201302271054r3bc73-0ubuntu1) precise; urgency=low
+
+  * Packaging for 12.04
+
+ -- WANG Lu <coolwanglu@gmail.com>  Wed, 27 Feb 2013 10:54:12 +0800
+
+pdf2htmlex (0.7-1~git201302271053r3bc73-0ubuntu1) quantal; urgency=low
+
+  * Fix packpage dependency 
+
+ -- WANG Lu <coolwanglu@gmail.com>  Wed, 27 Feb 2013 10:52:17 +0800
+
+pdf2htmlex (0.7-1~git201302270111r3bc73-0ubuntu1) quantal; urgency=low
+
+  * Regular upload
+
+ -- WANG Lu <coolwanglu@gmail.com>  Wed, 27 Feb 2013 01:11:56 +0800
+
+pdf2htmlex (0.7-1~git201302182049r3bc73-0ubuntu1) quantal; urgency=low
+
+  * New parameter: process-outline
+
+ -- WANG Lu <coolwanglu@gmail.com>  Mon, 18 Feb 2013 20:49:57 +0800
+
+pdf2htmlex (0.7-1~git201301292229r2595c-0ubuntu1) quantal; urgency=low
+
+  * Fixed a CSS issue
+
+ -- WANG Lu <coolwanglu@gmail.com>  Tue, 29 Jan 2013 22:29:21 +0800
+
+pdf2htmlex (0.7-1~git201301282229r2595c-0ubuntu1) quantal; urgency=low
+
+  * Process PDF Outline  
+
+ -- WANG Lu <coolwanglu@gmail.com>  Mon, 28 Jan 2013 22:29:35 +0800
+
+pdf2htmlex (0.7-1~git201301261427r2595c-0ubuntu1) quantal; urgency=low
+
+  * New version, see Changelog for changelog
+
+ -- WANG Lu <coolwanglu@gmail.com>  Sat, 26 Jan 2013 14:27:18 +0800
+
+pdf2htmlex (0.6-1~git201212182148rd76af-0ubuntu1) quantal; urgency=low
+
+  * fix dependency of poppler for quantal 
+
+ -- WANG Lu <coolwanglu@gmail.com>  Tue, 18 Dec 2012 21:48:35 +0800
+
+pdf2htmlex (0.6-1~git201212111844rd76af-0ubuntu1) quantal; urgency=low
+
+  * Package for quantal
+
+ -- WANG Lu <coolwanglu@gmail.com>  Tue, 11 Dec 2012 18:44:44 +0800
+
+pdf2htmlex (0.6-1~git201210070052rcb9a8-0ubuntu1) precise; urgency=low
+
+  * New version 
+
+ -- WANG Lu <coolwanglu@gmail.com>  Sun, 07 Oct 2012 00:52:42 +0800
+
 pdf2htmlex (0.5-1~git201210051800rbaa37-0ubuntu1) precise; urgency=low
 
   * Regularly re-packing. 

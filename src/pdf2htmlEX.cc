@@ -1,6 +1,6 @@
-// pdftohtmlEX.cc
+// pdf2htmlEX.cc
 //
-// Copyright (C) 2012 Lu Wang <coolwanglu@gmail.com>
+// Copyright (C) 2012,2013 Lu Wang <coolwanglu@gmail.com>
 
 #include <cstdio>
 #include <cstdlib>
@@ -10,8 +10,11 @@
 #include <string>
 #include <limits>
 #include <iostream>
+#include <memory>
+
 #include <getopt.h>
 
+#include <poppler-config.h>
 #include <goo/GooString.h>
 
 #include <Object.h>
@@ -19,10 +22,18 @@
 #include <PDFDocFactory.h>
 #include <GlobalParams.h>
 
-#include "HTMLRenderer.h"
-#include "Param.h"
 #include "pdf2htmlEX-config.h"
+
+#if ENABLE_SVG
+#include <cairo.h>
+#endif
+
 #include "ArgParser.h"
+#include "Param.h"
+#include "HTMLRenderer/HTMLRenderer.h"
+
+#include "util/path.h"
+#include "util/ffw.h"
 
 using namespace std;
 using namespace pdf2htmlEX;
@@ -30,69 +41,144 @@ using namespace pdf2htmlEX;
 Param param;
 ArgParser argparser;
 
+void deprecated_font_suffix(const char * dummy = nullptr)
+{
+    cerr << "--font-suffix is deprecated. Use `--font-format` instead." << endl;
+    exit(EXIT_FAILURE);
+}
+
 void show_usage_and_exit(const char * dummy = nullptr)
 {
-    cerr << "pdftohtmlEX version " << PDF2HTMLEX_VERSION << endl;
-    cerr << endl;
-    cerr << "Copyright 2012 Lu Wang <coolwanglu@gmail.com>" << endl;
-    cerr << endl;
-    cerr << "Usage: pdf2htmlEX [Options] <input.pdf> [<output.html>]" << endl;
-    cerr << endl;
-    cerr << "Options:" << endl;
+    cerr << "Usage: pdf2htmlEX [options] <input.pdf> [<output.html>]" << endl;
     argparser.show_usage(cerr);
-    cerr << endl;
-    cerr << "Run 'man pdf2htmlEX' for detailed information" << endl;
-    cerr << endl;
     exit(EXIT_FAILURE);
+}
+
+void show_version_and_exit(const char * dummy = nullptr)
+{
+    cerr << "pdf2htmlEX version " << PDF2HTMLEX_VERSION << endl;
+    cerr << "Copyright 2012,2013 Lu Wang <coolwanglu@gmail.com> and other contributers" << endl;
+    cerr << "Libraries: " << endl;
+    cerr << "  poppler " << POPPLER_VERSION << endl;
+    cerr << "  libfontforge " << ffw_get_version() << endl;
+#if ENABLE_SVG
+    cerr << "  cairo " << cairo_version_string() << endl;
+#endif
+    cerr << "Default data-dir: " << PDF2HTMLEX_DATA_PATH << endl;
+    cerr << "Supported image format:";
+#ifdef ENABLE_LIBPNG
+    cerr << " png";
+#endif
+#ifdef ENABLE_LIBJPEG
+    cerr << " jpg";
+#endif
+#if ENABLE_SVG
+    cerr << " svg";
+#endif
+    cerr << endl;
+    cerr << endl;
+    exit(EXIT_SUCCESS);
+}
+
+void embed_parser (const char * str)
+{
+    while(true)
+    {
+        switch(*str)
+        {
+            case '\0': return; break;
+            case 'c': param.embed_css = 0; break;
+            case 'C': param.embed_css = 1; break;
+            case 'f': param.embed_font = 0; break;
+            case 'F': param.embed_font = 1; break;
+            case 'i': param.embed_image = 0; break;
+            case 'I': param.embed_image = 1; break;
+            case 'j': param.embed_javascript = 0; break;
+            case 'J': param.embed_javascript = 1; break;
+            case 'o': param.embed_outline = 0; break;
+            case 'O': param.embed_outline = 1; break;
+            default:
+                cerr << "Unknown character `" << (*str) << "` for --embed" << endl;
+                break;
+        }
+        ++ str;
+    }
 }
 
 void parse_options (int argc, char **argv)
 {
     argparser
-        .add("help,h", "show all options", &show_usage_and_exit)
-        .add("version,v", "show copyright and version info", &show_usage_and_exit)
-
-        .add("owner-password,o", &param.owner_password, "", "owner password (for encrypted files)", nullptr, true)
-        .add("user-password,u", &param.user_password, "", "user password (for encrypted files)", nullptr, true)
-
+        // pages
+        .add("first-page,f", &param.first_page, 1, "first page to convert")
+        .add("last-page,l", &param.last_page, numeric_limits<int>::max(), "last page to convert")
+        
+        // dimensions
+        .add("zoom", &param.zoom, 0, "zoom ratio", true)
+        .add("fit-width", &param.fit_width, 0, "fit width to <fp> pixels", true) 
+        .add("fit-height", &param.fit_height, 0, "fit height to <fp> pixels", true)
+        .add("use-cropbox", &param.use_cropbox, 1, "use CropBox instead of MediaBox")
+        .add("hdpi", &param.h_dpi, 144.0, "horizontal resolution for graphics in DPI")
+        .add("vdpi", &param.v_dpi, 144.0, "vertical resolution for graphics in DPI")
+        
+        // output files
+        .add("embed", "specify which elements should be embedded into output", embed_parser, true)
+        .add("embed-css", &param.embed_css, 1, "embed CSS files into output")
+        .add("embed-font", &param.embed_font, 1, "embed font files into output")
+        .add("embed-image", &param.embed_image, 1, "embed image files into output")
+        .add("embed-javascript", &param.embed_javascript, 1, "embed JavaScript files into output")
+        .add("embed-outline", &param.embed_outline, 1, "embed outlines into output")
+        .add("split-pages", &param.split_pages, 0, "split pages into separate files")
         .add("dest-dir", &param.dest_dir, ".", "specify destination directory")
-        .add("data-dir", &param.data_dir, PDF2HTMLEX_DATA_PATH, "specify data directory")
-
-        .add("first-page,f", &param.first_page, 1, "first page to process")
-        .add("last-page,l", &param.last_page, numeric_limits<int>::max(), "last page to process")
-
-        .add("zoom", &param.zoom, 0, "zoom ratio", nullptr, true)
-        .add("fit-width", &param.fit_width, 0, "fit width", nullptr, true) 
-        .add("fit-height", &param.fit_height, 0, "fit height", nullptr, true)
-        .add("hdpi", &param.h_dpi, 144.0, "horizontal DPI for non-text")
-        .add("vdpi", &param.v_dpi, 144.0, "vertical DPI for non-text")
-
-        .add("process-nontext", &param.process_nontext, 1, "process nontext objects")
-        .add("single-html", &param.single_html, 1, "combine everything into one single HTML file")
-        .add("split-pages", &param.split_pages, 0, "split pages into separated files")
-        .add("embed-base-font", &param.embed_base_font, 0, "embed local matched font for base 14 fonts in the PDF file")
-        .add("embed-external-font", &param.embed_external_font, 0, "embed local matched font for external fonts in the PDF file")
-        .add("decompose-ligature", &param.decompose_ligature, 0, "decompose ligatures, for example 'fi' -> 'f''i'")
-
-        .add("heps", &param.h_eps, 1.0, "max tolerated horizontal offset (in pixels)")
-        .add("veps", &param.v_eps, 1.0, "max tolerated vertical offset (in pixels)")
-        .add("space-threshold", &param.space_threshold, (1.0/8), "distance no thiner than (threshold * em) will be considered as a space character")
-        .add("font-size-multiplier", &param.font_size_multiplier, 4.0, "setting a value greater than 1 would increase the rendering accuracy")
-        .add("auto-hint", &param.auto_hint, 0, "Whether to generate hints for fonts")
-        .add("tounicode", &param.tounicode, 0, "Specify how to deal with ToUnicode map, 0 for auto, 1 for forced, -1 for disabled")
+        .add("css-filename", &param.css_filename, "", "filename of the generated css file")
+        .add("page-filename", &param.page_filename, "", "filename template for splitted pages ")
+        .add("outline-filename", &param.outline_filename, "", "filename of the generated outline file")
+        .add("process-nontext", &param.process_nontext, 1, "render graphics in addition to text")
+        .add("process-outline", &param.process_outline, 1, "show outline in HTML")
+        .add("printing", &param.printing, 1, "enable printing support")
+        .add("fallback", &param.fallback, 0, "output in fallback mode")
+        
+        // fonts
+        .add("embed-external-font", &param.embed_external_font, 1, "embed local match for external fonts")
+        .add("font-format", &param.font_format, "ttf", "suffix for embedded font files (ttf,otf,woff,svg)")
+        .add("decompose-ligature", &param.decompose_ligature, 0, "decompose ligatures, such as \uFB01 -> fi")
+        .add("auto-hint", &param.auto_hint, 0, "use fontforge autohint on fonts without hints")
+        .add("external-hint-tool", &param.external_hint_tool, "", "external tool for hinting fonts (overrides --auto-hint)")
+        .add("stretch-narrow-glyph", &param.stretch_narrow_glyph, 0, "stretch narrow glyphs instead of padding them")
+        .add("squeeze-wide-glyph", &param.squeeze_wide_glyph, 1, "shrink wide glyphs instead of truncating them")
+        .add("override-fstype", &param.override_fstype, 0, "clear the fstype bits in TTF/OTF fonts")
+        .add("process-type3", &param.process_type3, 0, "convert Type 3 fonts for web (experimental)")
+        
+        // text
+        .add("heps", &param.h_eps, 1.0, "horizontal threshold for merging text, in pixels")
+        .add("veps", &param.v_eps, 1.0, "vertical threshold for merging text, in pixels")
+        .add("space-threshold", &param.space_threshold, (1.0/8), "word break threshold (threshold * em)")
+        .add("font-size-multiplier", &param.font_size_multiplier, 4.0, "a value greater than 1 increases the rendering accuracy")
         .add("space-as-offset", &param.space_as_offset, 0, "treat space characters as offsets")
-        .add("stretch_narrow_glyph", &param.stretch_narrow_glyph, 0, "stretch narrow glyphs instead of padding space")
-        .add("squeeze-wide-glyph", &param.squeeze_wide_glyph, 0, "squeeze wide glyphs instead of truncating")
-        .add("remove-unused-glyph", &param.remove_unused_glyph, 0, "remove unused glyphs in embedded fonts")
+        .add("tounicode", &param.tounicode, 0, "how to handle ToUnicode CMaps (0=auto, 1=force, -1=ignore)")
+        .add("optimize-text", &param.optimize_text, 0, "try to reduce the number of HTML elements used for text")
 
-        .add("font-suffix", &param.font_suffix, ".ttf", "suffix for extracted font files")
-        .add("font-format", &param.font_format, "opentype", "format for extracted font files")
-        .add("external-hint-tool", &param.external_hint_tool, "", "external tool for hintting fonts.(overrides --auto-hint)")
-        .add("css-filename", &param.css_filename, "", "Specify the file name of the generated css file")
+        // background image
+        .add("bg-format", &param.bg_format, "png", "specify background image format")
+        
+        // encryption
+        .add("owner-password,o", &param.owner_password, "", "owner password (for encrypted files)", true)
+        .add("user-password,u", &param.user_password, "", "user password (for encrypted files)", true)
+        .add("no-drm", &param.no_drm, 0, "override document DRM settings")
+        
+        // misc.
+        .add("clean-tmp", &param.clean_tmp, 1, "remove temporary files after conversion")
+        .add("data-dir", &param.data_dir, PDF2HTMLEX_DATA_PATH, "specify data directory")
+        // TODO: css drawings are hidden on print, for annot links, need to fix it for other drawings
+//        .add("css-draw", &param.css_draw, 0, "[experimental and unsupported] CSS drawing")
+        .add("debug", &param.debug, 0, "print debugging information")
+        
+        // meta
+        .add("version,v", "print copyright and version info", &show_version_and_exit)
+        .add("help,h", "print usage information", &show_usage_and_exit)
 
-        .add("debug", &param.debug, 0, "output debug information")
-        .add("clean-tmp", &param.clean_tmp, 1, "clean temporary files after processing")
-        .add("css-draw", &param.css_draw, 0, "[Experimental and Unsupported] CSS Drawing")
+        // deprecated
+        .add("font-suffix", "", &deprecated_font_suffix)
+
         .add("", &param.input_filename, "", "")
         .add("", &param.output_filename, "", "")
         ;
@@ -123,14 +209,110 @@ void parse_options (int argc, char **argv)
     }
 }
 
+void check_param()
+{
+    if (param.input_filename == "")
+    {
+        show_usage_and_exit();
+    }
+
+    if(param.output_filename.empty())
+    {
+        const string s = get_filename(param.input_filename);
+        if(get_suffix(param.input_filename) == ".pdf")
+        {
+            param.output_filename = s.substr(0, s.size() - 4) + ".html";
+
+        }
+        else
+        {
+            param.output_filename = s + ".html";
+        }
+    }
+
+    if(param.page_filename.empty())
+    {
+        const string s = get_filename(param.input_filename);
+        if(get_suffix(param.input_filename) == ".pdf")
+        {
+            param.page_filename = s.substr(0, s.size() - 4) + "%d.page";
+        }
+        else
+        {
+            param.page_filename = s + "%d.page";
+        }
+        sanitize_filename(param.page_filename);
+    }
+
+    else
+    {
+        // Need to make sure we have a page number placeholder in the filename
+        if(!sanitize_filename(param.page_filename))
+        {
+            // Inject the placeholder just before the file extension
+            const string suffix = get_suffix(param.page_filename);
+            param.page_filename = param.page_filename.substr(0, param.page_filename.size() - suffix.size()) + "%d" + suffix;
+            sanitize_filename(param.page_filename);
+        }
+    }
+    if(param.css_filename.empty())
+    {
+        const string s = get_filename(param.input_filename);
+
+        if(get_suffix(param.input_filename) == ".pdf")
+        {
+            param.css_filename = s.substr(0, s.size() - 4) + ".css";
+        }
+        else
+        {
+            if(!param.split_pages)
+                param.css_filename = s + ".css";
+        }
+    }
+    if(param.outline_filename.empty())
+    {
+        const string s = get_filename(param.input_filename);
+
+        if(get_suffix(param.input_filename) == ".pdf")
+        {
+            param.outline_filename = s.substr(0, s.size() - 4) + ".outline";
+        }
+        else
+        {
+            if(!param.split_pages)
+                param.outline_filename = s + ".outline";
+        }
+    }
+
+    if(false) { }
+#ifdef ENABLE_LIBPNG
+    else if (param.bg_format == "png") { }
+#endif
+#ifdef ENABLE_LIBJPEG
+    else if (param.bg_format == "jpg") { }
+#endif
+#if ENABLE_SVG
+    else if(param.bg_format == "svg") { }
+#endif
+    else
+    {
+        cerr << "Image format not supported: " << param.bg_format << endl;
+        exit(EXIT_FAILURE);
+    }
+
+#if not ENABLE_SVG
+    if(param.process_type3)
+    {
+        cerr << "process-type3 is enabled, however SVG support is not built in this version of pdf2htmlEX." << endl;
+        exit(EXIT_FAILURE);
+    }
+#endif
+}
+
 int main(int argc, char **argv)
 {
     parse_options(argc, argv);
-    if (param.input_filename == "")
-    {
-        cerr << "Missing input filename" << endl;
-        exit(EXIT_FAILURE);
-    }
+    check_param();
 
     //prepare the directories
     {
@@ -161,7 +343,7 @@ int main(int argc, char **argv)
     // read config file
     globalParams = new GlobalParams();
     // open PDF file
-    PDFDoc *doc = nullptr;
+    PDFDoc * doc = nullptr;
     try
     {
         {
@@ -175,57 +357,22 @@ int main(int argc, char **argv)
             delete ownerPW;
         }
 
-        if (!doc->isOk()) {
+        if (!doc->isOk()) 
             throw "Cannot read the file";
-        }
 
         // check for copy permission
-        if (!doc->okToCopy()) {
-            throw "Copying of text from this document is not allowed.";
+        if (!doc->okToCopy()) 
+        {
+            if (param.no_drm == 0)
+                throw "Copying of text from this document is not allowed.";
+            cerr << "Document has copy-protection bit set." << endl;
         }
 
         param.first_page = min<int>(max<int>(param.first_page, 1), doc->getNumPages());
         param.last_page = min<int>(max<int>(param.last_page, param.first_page), doc->getNumPages());
 
-        if(param.output_filename == "")
-        {
-            const string s = get_filename(param.input_filename);
 
-            if(get_suffix(param.input_filename) == ".pdf")
-            {
-                if(param.split_pages)
-                    param.output_filename = s.substr(0, s.size() - 4);
-                else
-                    param.output_filename = s.substr(0, s.size() - 4) + ".html";
-
-            }
-            else
-            {
-                if(param.split_pages)
-                    param.output_filename = s;
-                else
-                    param.output_filename = s + ".html";
-                
-            }
-        }
-        if(param.css_filename == "")
-        {
-            const string s = get_filename(param.input_filename);
-
-            if(get_suffix(param.input_filename) == ".pdf")
-            {
-                param.css_filename = s.substr(0, s.size() - 4) + ".css";
-            }
-            else
-            {
-                if(!param.split_pages)
-                    param.css_filename = s + ".css";
-            }
-        }
-
-        HTMLRenderer * htmlOut = new HTMLRenderer(&param);
-        htmlOut->process(doc);
-        delete htmlOut;
+        unique_ptr<HTMLRenderer>(new HTMLRenderer(param))->process(doc);
 
         finished = true;
     }
@@ -239,8 +386,8 @@ int main(int argc, char **argv)
     }
 
     // clean up
-    if(doc) delete doc;
-    if(globalParams) delete globalParams;
+    delete doc;
+    delete globalParams;
 
     // check for memory leaks
     Object::memCheck(stderr);

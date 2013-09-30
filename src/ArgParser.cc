@@ -5,11 +5,11 @@
  * 2012.09.10
  */
 
-#include <getopt.h>
 #include <iostream>
-#include <vector>
 #include <unordered_map>
 #include <cassert>
+
+#include <getopt.h>
 
 #include "ArgParser.h"
 
@@ -41,17 +41,20 @@ void dump_value(std::ostream & out, const std::string & v)
     out << '"' << v << '"';
 }
 
-ArgParser::~ArgParser(void)
+ArgParser & ArgParser::add(const char * optname, const char * description, ArgParserCallBack callback, bool need_arg)
 {
-    for(auto iter = arg_entries.begin(); iter != arg_entries.end(); ++iter)
-        delete (*iter);
-    for(auto iter = optional_arg_entries.begin(); iter != optional_arg_entries.end(); ++iter)
-        delete (*iter);
-}
+    // ArgEntry does not accept nullptr as optname nor description
+    if((!optname) || (!optname[0]))
+    {
+        // when optname is nullptr or "", it's optional, and description is dropped
+        optional_arg_entries.emplace_back(new ArgEntry<string, string>("", "", callback, need_arg));
+    }
+    else
+    {
+        arg_entries.emplace_back(new ArgEntry<string, string>(optname, (description ? description : ""), callback, need_arg));
+    }
 
-ArgParser & ArgParser::add(const char * optname, const char * description, ArgParserCallBack callback)
-{
-    return add<char>(optname, nullptr, 0, description, callback, true);
+    return *this;
 }
 
 void ArgParser::parse(int argc, char ** argv) const
@@ -66,7 +69,7 @@ void ArgParser::parse(int argc, char ** argv) const
 
     for(auto iter = arg_entries.begin(); iter != arg_entries.end(); ++iter)
     {
-        const ArgEntryBase * p = *iter;
+        const auto * p = iter->get();
         if(p->shortname != 0)
         {
             optstring.push_back(p->shortname);
@@ -76,7 +79,7 @@ void ArgParser::parse(int argc, char ** argv) const
             int v = p->shortname;
             if(!(opt_map.insert(make_pair(v, p)).second))
             {
-                cerr << "Warning: duplicated shortname '" << v << "' used by -" << (char)(p->shortname) << " and -" << (char)(opt_map[p->shortname]->shortname) << endl;
+                cerr << "Warning: duplicated shortname: " << v << endl;
             }
         }
 
@@ -93,7 +96,7 @@ void ArgParser::parse(int argc, char ** argv) const
             }
             if(!(opt_map.insert(make_pair(v, p)).second))
             {
-                cerr << "Warning: duplicated shortname '" << v << "' used by --" << (p->name) << " and --" << (opt_map[p->shortname]->name) << endl;
+                cerr << "Warning: duplicated long name: " << (p->name) << endl;
             }
         }
     }
@@ -101,11 +104,11 @@ void ArgParser::parse(int argc, char ** argv) const
     optstring.push_back(0);
     longopts.resize(longopts.size() + 1);
     {
-	auto & cur = longopts.back();
-	cur.name = 0;
-	cur.has_arg = 0;
-	cur.flag = 0;
-	cur.val = 0;
+        auto & cur = longopts.back();
+        cur.name = 0;
+        cur.has_arg = 0;
+        cur.flag = 0;
+        cur.val = 0;
     }
 
     {
@@ -146,6 +149,10 @@ void ArgParser::show_usage(ostream & out) const
     }
 }
 
+template<> const char * ArgParser::get_type_name<int>    (void) { return "int";    }
+template<> const char * ArgParser::get_type_name<double> (void) { return "fp";     }
+template<> const char * ArgParser::get_type_name<string> (void) { return "string"; }
+
 ArgParser::ArgEntryBase::ArgEntryBase(const char * name, const char * description, bool need_arg)
     : shortname(0), name(name), description(description), need_arg(need_arg)
 { 
@@ -159,11 +166,11 @@ ArgParser::ArgEntryBase::ArgEntryBase(const char * name, const char * descriptio
         }
         else
         {
-            cerr << "Warning: argument '" << this->name << "' may not be parsed correctly" << endl;
+            cerr << "Warning: argument '" << this->name << "' cannnot be parsed as a short option" << endl;
         }
     }
 }
 
-const int ArgParser::arg_col_width = 40;
+const int ArgParser::arg_col_width = 31;
 
 } // namespace pdf2htmlEX

@@ -5,9 +5,11 @@ set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration (Debug, Release, 
 project(pdf2htmlEX)
 cmake_minimum_required(VERSION 2.6.0 FATAL_ERROR)
 
-include_directories(${CMAKE_SOURCE_DIR}/src/include)
+option(ENABLE_SVG "Enable SVG support, for generating SVG background images and converting Type 3 fonts" OFF)
 
-set(PDF2HTMLEX_VERSION "0.5")
+include_directories(${CMAKE_SOURCE_DIR}/src)
+
+set(PDF2HTMLEX_VERSION "0.10")
 set(ARCHIVE_NAME pdf2htmlex-${PDF2HTMLEX_VERSION})
 add_custom_target(dist
     COMMAND git archive --prefix=${ARCHIVE_NAME}/ HEAD
@@ -15,26 +17,49 @@ add_custom_target(dist
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 find_package(PkgConfig)
-pkg_check_modules(POPPLER REQUIRED poppler>=0.20.0)
+pkg_check_modules(POPPLER poppler>=0.23.0)
+if(POPPLER_FOUND)
+    set(POPPLER_OLDER_THAN_0_23_0 0)
+else()
+    set(POPPLER_OLDER_THAN_0_23_0 1)
+    pkg_check_modules(POPPLER REQUIRED poppler>=0.20.0)
+endif()
 include_directories(${POPPLER_INCLUDE_DIRS})
 link_directories(${POPPLER_LIBRARY_DIRS})
 set(PDF2HTMLEX_LIBS ${PDF2HTMLEX_LIBS} ${POPPLER_LIBRARIES})
 
-# disable CAIRO for now
-if(0)
-pkg_check_modules(POPPLER_CAIRO poppler-cairo>=0.20.0)
-if(POPPLER_CAIRO_FOUND)
-    set(HAVE_CAIRO 1)
-    include_directories(${POPPLER_CAIRO_INCLUDE_DIRS})
-    link_directories(${POPPLER_CAIRO_LIBRARY_DIRS})
-    set(PDF2HTMLEX_LIBS ${PDF2HTMLEX_LIBS} ${POPPLER_CAIRO_LIBRARIES})
-else()
-    set(HAVE_CAIRO 0)
+if(ENABLE_SVG)
+    pkg_check_modules(CAIRO REQUIRED cairo>=1.10.0)
+    message("Trying to locate cairo-svg...")
+    find_path(CAIRO_SVG_INCLUDE_PATH cairo-svg.h PATHS ${CAIRO_INCLUDE_DIRS} NO_DEFAULT_PATH)
+    if(CAIRO_SVG_INCLUDE_PATH)
+        include_directories(${CAIRO_INCLUDE_DIRS})
+        link_directories(${CAIRO_LIBRARY_DIRS})
+        set(PDF2HTMLEX_LIBS ${PDF2HTMLEX_LIBS} ${CAIRO_LIBRARIES})
+        set(ENABLE_SVG 1)
+        if(POPPLER_OLDER_THAN_0_23_0)
+            set(CAIROOUTPUTDEV_PATH 3rdparty/poppler/0.22.5)
+        else()
+            set(CAIROOUTPUTDEV_PATH 3rdparty/poppler/git)
+        endif()
+        include_directories(${CAIROOUTPUTDEV_PATH})
+        set(PDF2HTMLEX_SRC ${PDF2HTMLEX_SRC}
+            ${CAIROOUTPUTDEV_PATH}/CairoFontEngine.h
+            ${CAIROOUTPUTDEV_PATH}/CairoFontEngine.cc
+            ${CAIROOUTPUTDEV_PATH}/CairoRescaleBox.h
+            ${CAIROOUTPUTDEV_PATH}/CairoRescaleBox.cc
+            ${CAIROOUTPUTDEV_PATH}/CairoOutputDev.h
+            ${CAIROOUTPUTDEV_PATH}/CairoOutputDev.cc
+        )
+    else()
+        message(FATAL_ERROR "Error: no SVG support found in Cairo")
+    endif()
+
+    find_package(Freetype REQUIRED)
+    include_directories(${FREETYPE_INCLUDE_DIRS})
+    link_directories(${FREETYPE_LIBRARY_DIRS})
+    set(PDF2HTMLEX_LIBS ${PDF2HTMLEX_LIBS} ${FREETYPE_LIBRARIES})
 endif()
-else()
-set(HAVE_CAIRO 0)
-endif()
-    
 
 # fontforge starts using pkg-config 'correctly' since 2.0.0
 pkg_check_modules(FONTFORGE libfontforge>=2.0.0)
@@ -43,7 +68,7 @@ if(FONTFORGE_FOUND)
     link_directories(${FONTFORGE_LIBRARY_DIRS})
     set(PDF2HTMLEX_LIBS ${PDF2HTMLEX_LIBS} ${FONTFORGE_LIBRARIES})
 else()
-    message("Trying to locate fontforge...")
+    message("Trying to locate old versions of fontforge...")
     find_path(FF_INCLUDE_PATH fontforge/fontforge.h)
     if(FF_INCLUDE_PATH)
         message("Found fontforge.h: ${FF_INCLUDE_PATH}/fontforge/fontforge.h")
@@ -51,7 +76,7 @@ else()
         include_directories(${FONTFORGE_INCLUDE_DIRS})
         # MacOSX gettext is in /opt/local/include - strange
         if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")  
-          find_path(GETTEXT_INCLUDE_PATH libintl.h)
+          find_path(GETTEXT_INCLUDE_PATH libintl.h HINTS "/usr/local/opt/gettext/include") # homebrew
           if(GETTEXT_INCLUDE_PATH)
             include_directories(${GETTEXT_INCLUDE_PATH})
           else()
@@ -60,6 +85,13 @@ else()
         endif()
     else()
         message(FATAL_ERROR "Error: cannot locate fontforge.h")
+    endif()
+    find_path(FF_CONFIG_INCLUDE_PATH config.h PATHS ${FONTFORGE_INCLUDE_DIRS} NO_DEFAULT_PATH)
+    if(FF_CONFIG_INCLUDE_PATH)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -include ${FF_CONFIG_INCLUDE_PATH}/config.h")
+    message("Found config.h: ${FF_CONFIG_INCLUDE_PATH}/config.h")
+    else()
+    message("Cannot locate config.h for fontforge")
     endif()
 
     macro(wl_find_library LIB_NAME RESULT)
@@ -98,18 +130,11 @@ else()
     set(PDF2HTMLEX_LIBS ${PDF2HTMLEX_LIBS} ${PYTHON_LIBRARIES})
 endif()
 
-find_path(FF_CONFIG_INCLUDE_PATH config.h PATHS
-  ${FONTFORGE_INCLUDE_DIRS} NO_DEFAULT_PATH)
-if(FF_CONFIG_INCLUDE_PATH)
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -include ${FF_CONFIG_INCLUDE_PATH}/config.h")
-message("Found config.h: ${FF_CONFIG_INCLUDE_PATH}/config.h")
-else()
-message("Cannot locate config.h for fontforge")
-endif()
 
 # debug build flags (overwrite default cmake debug flags)
-set(CMAKE_C_FLAGS_DEBUG "-ggdb")
-set(CMAKE_CXX_FLAGS_DEBUG "-ggdb")
+set(CMAKE_C_FLAGS_DEBUG "-ggdb -pg")
+set(CMAKE_CXX_FLAGS_DEBUG "-ggdb -pg")
+set(CMAKE_EXE_LINKER_FLAGS_DEBUG "-pg")
 
 # release build flags (overwrite default cmake release flags)
 set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
@@ -126,50 +151,96 @@ endif()
 
 # CYGWIN or GCC 4.5.x bug
 if(CYGWIN)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --std=gnu++0x")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=gnu++0x")
 else()
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --std=c++0x")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
 endif()
 
-configure_file (${CMAKE_SOURCE_DIR}/src/include/pdf2htmlEX-config.h.in ${CMAKE_SOURCE_DIR}/src/include/pdf2htmlEX-config.h)
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("${CMAKE_CXX_FLAGS}" CXX0X_SUPPORT)
+if(NOT CXX0X_SUPPORT)
+    message(FATAL_ERROR "Error: you compiler does not support C++0x, please update it.")
+endif()
+
+
+configure_file (${CMAKE_SOURCE_DIR}/src/pdf2htmlEX-config.h.in ${CMAKE_SOURCE_DIR}/src/pdf2htmlEX-config.h)
 configure_file (${CMAKE_SOURCE_DIR}/pdf2htmlEX.1.in ${CMAKE_SOURCE_DIR}/pdf2htmlEX.1)
 
-add_executable(pdf2htmlEX 
+include(${CMAKE_SOURCE_DIR}/src/css_class_names.cmakelists.txt)
+configure_file (${CMAKE_SOURCE_DIR}/src/util/css_const.h.in ${CMAKE_SOURCE_DIR}/src/util/css_const.h)
+configure_file (${CMAKE_SOURCE_DIR}/share/base.css.in ${CMAKE_SOURCE_DIR}/share/base.css)
+configure_file (${CMAKE_SOURCE_DIR}/share/fancy.css.in ${CMAKE_SOURCE_DIR}/share/fancy.css)
+configure_file (${CMAKE_SOURCE_DIR}/share/pdf2htmlEX.js.in ${CMAKE_SOURCE_DIR}/share/pdf2htmlEX.js)
+
+set(PDF2HTMLEX_SRC ${PDF2HTMLEX_SRC}
+    src/Param.h
     src/pdf2htmlEX.cc 
-    src/include/HTMLRenderer.h 
-    src/HTMLRenderer/general.cc
-    src/HTMLRenderer/state.cc
-    src/HTMLRenderer/install.cc
-    src/HTMLRenderer/export.cc
-    src/HTMLRenderer/text.cc
-    src/HTMLRenderer/image.cc
+    src/pdf2htmlEX-config.h
+    src/HTMLRenderer/HTMLRenderer.h 
     src/HTMLRenderer/draw.cc
+    src/HTMLRenderer/general.cc
+    src/HTMLRenderer/image.cc
+    src/HTMLRenderer/font.cc
     src/HTMLRenderer/link.cc
-    src/include/namespace.h
-    src/HTMLRenderer/LineBuffer.cc
-    src/include/ffw.h
-    src/ffw.c
-    src/include/BackgroundRenderer.h 
-    src/include/SplashBackgroundRenderer.h 
-    src/SplashBackgroundRenderer.cc 
-    src/include/CairoBackgroundRenderer.h 
-    src/CairoBackgroundRenderer.cc 
-    src/include/Preprocessor.h
-    src/Preprocessor.cc
-    src/include/util.h
-    src/util.cc
-    src/include/ArgParser.h
+    src/HTMLRenderer/outline.cc
+    src/HTMLRenderer/state.cc
+    src/HTMLRenderer/text.cc
+    src/BackgroundRenderer/BackgroundRenderer.h 
+    src/BackgroundRenderer/BackgroundRenderer.cc
+    src/BackgroundRenderer/SplashBackgroundRenderer.h 
+    src/BackgroundRenderer/SplashBackgroundRenderer.cc 
+    src/BackgroundRenderer/CairoBackgroundRenderer.h 
+    src/BackgroundRenderer/CairoBackgroundRenderer.cc 
+    src/util/const.h
+    src/util/const.cc
+    src/util/css_const.h
+    src/util/encoding.h
+    src/util/encoding.cc
+    src/util/ffw.h
+    src/util/ffw.c
+    src/util/math.h
+    src/util/math.cc
+    src/util/misc.h
+    src/util/misc.cc
+    src/util/namespace.h
+    src/util/path.h
+    src/util/path.cc
+    src/util/unicode.h
+    src/util/unicode.cc
+    src/ArgParser.h
     src/ArgParser.cc
-    src/include/pdf2htmlEX-config.h
+    src/Base64Stream.h
+    src/Base64Stream.cc
+    src/Color.h
+    src/Color.cc
+    src/HTMLState.h
+    src/HTMLTextLine.h
+    src/HTMLTextLine.cc
+    src/HTMLTextPage.h
+    src/HTMLTextPage.cc
+    src/Preprocessor.h
+    src/Preprocessor.cc
+    src/StringFormatter.h
+    src/StringFormatter.cc
+    src/TmpFiles.h
+    src/TmpFiles.cc
     )
+
+add_executable(pdf2htmlEX ${PDF2HTMLEX_SRC})
 target_link_libraries(pdf2htmlEX ${PDF2HTMLEX_LIBS})
 
 install (TARGETS pdf2htmlEX DESTINATION bin)
 file (GLOB datafiles 
     share/base.css
+    share/fancy.css
     share/jquery.js
-    share/pdf2htmlEX.js
     share/manifest
+    share/pdf2htmlEX.js
+    share/pdf2htmlEX-64x64.png
     )
 install (FILES ${datafiles} DESTINATION share/pdf2htmlEX)
 install (FILES pdf2htmlEX.1 DESTINATION share/man/man1)
+
+enable_testing()
+add_test(test_naming 
+    python ${CMAKE_SOURCE_DIR}/test/test_naming.py)

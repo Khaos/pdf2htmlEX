@@ -1,38 +1,36 @@
-remove unused glyphs
+show hint for ttfautohint
+open issue for text accuracy
 
-don't dump image when there is nothing
+ - dots issue
+  - AdobeXML*.pdf
+ - font issue 
+  - cjkmix2*.pdf
+ - space issue
+  - python简明*.pdf
+ - smarter space-as-offset
+ - show hints about possible useful parameters
+ - optimization levels
+ - spinning icon for dynamic page loading
+ - fix negative word-spacing for IE
 
-Integrate splash/cairo
-native support for image
-native support for draw
+== Future: ==
 
-about glyph width:
- - IE
- - stretching ratio might not be correct.. letter 'f'
+Too difficult/complicated to implement:
+ - reflowable text/combine lines/unwrapping
+ - multi-thread
 
-draw non-orthogonal lines with CSS
-
-create a glyph for ' ', if there is not in a font
-
-position history stack (popstate)
-
-==Wait until someone asks==
-
-try harder finding glyph names (using fontforge) for CID Type 0
-rename single-html -> embed-font/image/css ...
-
-merge sub/sup into one line
-bug found in baidu(ubuntu...)
-precise link dest: zoom
-
-
-==Future==
-argument auto-completion
-use absolute positioning for long whitespace
-color invert
-detect duplicate base fonts when embedding
-disable selection if we know unicode is wrong
-combine lines (unwarp)
-Printing
-multiple charcode mapped to a same glyph
-check if we can add information to the font, and let browsers show ligatures automatically
+Not enough motivation/Lazy
+ - commandline argument auto-completion
+ - use absolute positioning for long whitespace
+ - detect duplicate base fonts when embedding
+ - disable selection if we know unicode is wrong
+ - check if we can add information to the font, and let browsers show ligatures automatically
+ - position history stack (popstate)
+ - draw non-orthogonal lines with CSS
+ - precise link destination: zoom
+ - multiple charcode mapped to a same glyph
+ - minimum line width of css drawing
+ - separate classes for annotations (such that we don't have to hide all css drawings for printing)
+ - Widget Annoataion
+ - handle large negative letter space
+ 
